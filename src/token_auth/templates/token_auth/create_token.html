@@ -3,6 +3,7 @@
 {% block token_auth %}
     <h2>Create Token URL</h2>
     <form method="post" action="" id="token_auth-form">
+{% csrf_token %}
         {{ form }}
         <button type="submit" class="primaryAction">{% trans "Create URLs" %}</button>
     </form>

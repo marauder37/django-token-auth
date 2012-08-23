@@ -7,6 +7,8 @@ from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
 from django.utils.translation import ugettext_lazy as _
 
+from django.contrib.auth.models import User
+
 from managers import ActiveTokenManager, ExpiredTokenManager
 from signals import signal_token_visited
 
@@ -57,6 +59,13 @@ class Token(models.Model):
     def __unicode__(self):
         return u"%s:%s - %s" % (self.email, self.url, self.token)
     
+    @property
+    def user(self):
+        try:
+            return User.objects.get(email=self.email)      
+        except User.DoesNotExist:
+            return None
+
     def generate_hash(self):
         """
         Create a unique SHA token/hash using the project SECRET_KEY, URL,

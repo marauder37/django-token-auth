@@ -6,13 +6,19 @@ from django.contrib.auth.decorators import login_required, permission_required, 
 from django.template.loader import render_to_string
 from django.conf import settings
 from django.core.mail import EmailMessage, EmailMultiAlternatives
-from django.http import HttpResponseRedirect
+from django.http import HttpResponseRedirect, HttpResponse
 from django.core.urlresolvers import reverse
 from django.utils.http import cookie_date
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 from django.utils.translation import ugettext_lazy as _
 from django.shortcuts import render_to_response, get_object_or_404
+from django.contrib.auth.models import User
+
+from reportlab.lib.units import mm
+from reportlab.graphics.barcode import code128
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
 
 from forms import TokenAddForm, ForwardProtectedURLForm, ProtectedURLForm
 from models import Token, ProtectedURL
@@ -136,9 +142,11 @@ def forward_token(request, token_str=None, **kwargs):
 
 def use_token(request, token_str=None, **kwargs):
     if not token_str is None:
+        #print "use_token: {}".format(token_str)
         token = get_object_or_404(Token, token=token_str)
         response = HttpResponseRedirect(token.url)
-        if not token.used:
+        if True or not token.used:
+            # our tokens are not single use so never lock them out
             response = HttpResponseRedirect(token.url)
             token.used = True
             token.save()
@@ -151,7 +159,8 @@ def use_token(request, token_str=None, **kwargs):
             response.set_cookie(TOKEN_COOKIE, tokens, max_age=max_age, expires=expires)
         # if token is used but user doesn't have token cookie so tell them NO
         elif not user_has_token_cookie(request, token_str=token.token):
-            response = HttpResponseRedirect(reverse('token_used', kwargs={'token_str':token.token,}))
+            response = HttpResponseRedirect(
+                reverse('token_used', kwargs={'token_str':token.token,}))
         # cookie's expired... answer is still no
         elif not token.valid_until is None and token.valid_until <= datetime.datetime.now():
             response = HttpResponseRedirect(reverse('token_expired'))
@@ -180,6 +189,80 @@ def expire_token(request, token_str=None, **kwargs):
     return response
 
 
+def token_logout(request, **kwargs):
+    """Remove all tokens then forward to the standard logout page"""
+    response = HttpResponseRedirect(reverse('logout_form'))
+    max_age = 2592000
+    expires_time = time.time() - max_age
+    expires = cookie_date(expires_time)
+    response.set_cookie(TOKEN_COOKIE, '', max_age=max_age, expires=expires)
+    return response
+
+
+def token_barcode(request, token_str):
+    try:
+        token = Token.objects.get(token=token_str)
+    except:
+        return HttpResponseRedirect(reverse('token_invalid'))
+
+    width = 85.6*mm
+    height = 53.98*mm
+    
+    xoffset = 62*mm
+    yoffset = 220*mm
+    
+    barcode_value = "####" + token_str
+    if token.valid_until:
+        expiry = token.valid_until.strftime("%d %h %Y")
+    else:
+        expiry = "Permanent"
+        
+    try:
+        user = User.objects.get(email=token.email)
+        name = "{} {}".format(user.first_name, user.last_name)
+    except User.DoesNotExist:
+        user = None
+        name = "No user record for token, authority invalid"
+        expiry = "not valid"
+    
+    response = HttpResponse(mimetype='application/pdf')
+    response['Content-Disposition'] = 'filename={}.pdf'.format(token_str)
+
+    p = canvas.Canvas(response, pagesize=A4, bottomup=True)
+    p.roundRect(xoffset, yoffset, width-2, height-2, 3*mm)
+
+    p.setFont("Helvetica", 12)
+    p.drawString(xoffset+3*mm, yoffset+height-6*mm, "GT-EX Global Transportation")
+
+    p.setFont("Helvetica", 16)
+    p.drawString(xoffset+3*mm, yoffset+height-13*mm, "Driver Authority")
+
+    p.setFont("Helvetica", 12)
+    p.drawString(xoffset+3*mm, yoffset+height-25*mm, name)
+    p.drawString(xoffset+3*mm, yoffset+height-36*mm, "Valid until: {}".format(expiry))
+
+    barcode = code128.Code128(barcode_value
+        , barWidth=.25*mm, barHeight=8*mm, lquiet=5*mm, rquiet=5*mm)    
+    barcode.drawOn(p, xoffset+(width - barcode.width)/2, yoffset+5*mm)
+
+    p.showPage()
+    p.save()
+
+    return response
+    
+
+def token_barcode_old(request, token_str):
+    text = "####"+token_str
+    bc = createBarcodeDrawing('Code128'
+        , value=text,  barWidth=1.6*mm, barHeight=60*mm, humanReadable=True)
+    dwg = Drawing(bc.width, bc.height)
+    dwg.add(bc, name='barcode')
+    response = HttpResponse(mimetype='image/png')
+    response['Content-Disposition'] = 'filename={}.png'.format(token_str)
+    response.write(dwg.asString('png'))
+    return response
+    
+
 def token_used(request, template='token_auth/token_used.html', token_str=None, **kwargs):
     if not token_str is None:
         extra_context={'token_str': token_str, }
@@ -203,11 +286,11 @@ def token_list(request):
     url_list = ProtectedURL.objects.all()
     return list_detail.object_list(
         request,
-        queryset = Token.active_objects.all().order_by('url'),
+        queryset = Token.active_objects.all().order_by('name'),
         template_name = 'token_auth/token_list.html',
         template_object_name = 'token',
         allow_empty = True,
-        extra_context = {'url_list': url_list, }
+        extra_context = {'url_list': url_list, 'request': request}
         )
 
 

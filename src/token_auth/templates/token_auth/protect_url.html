@@ -2,6 +2,7 @@
 {% load i18n %}
 {% block token_auth %}
 <form method="post" action="" class="uniForm grid_8">
+	{% csrf_token %}
 {{ form }}<button type="submit" class="primaryAction">{% trans "Create" %}</button>
 </form>
 {% endblock %}
